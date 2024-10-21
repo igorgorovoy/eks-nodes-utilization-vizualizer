@@ -1,5 +1,5 @@
 import time
-import json
+import json  # Додаємо імпорт json
 import boto3
 from kubernetes import client, config
 from colorama import Fore, Style
@@ -67,8 +67,8 @@ def get_instance_price(instance_type):
                 for key in price_dimensions:
                     price = price_dimensions[key]['priceDimensions']
                     for price_key in price:
-                        return float(price[price_key]['pricePerUnit']['USD'])  # Повертаємо ціну як float
-    return 0.0  # Повертаємо 0.0, якщо не вдалося отримати ціну
+                        return price[price_key]['pricePerUnit']['USD']
+    return "Unknown"
 
 # Функція для отримання утилізації CPU та пам'яті
 def get_node_utilization(node):
@@ -82,7 +82,7 @@ def get_node_utilization(node):
 
     cpu_utilization = (cpu_allocatable / cpu_capacity) * 100
     memory_utilization = (memory_allocatable / memory_capacity) * 100
-    return cpu_utilization, memory_utilization, cpu_capacity, memory_capacity
+    return cpu_utilization, memory_utilization
 
 # Функція для виведення прогрес-бару у стилі htop
 def display_htop_style(cpu_utilization, memory_utilization):
@@ -103,22 +103,17 @@ def analyze_nodes():
     while True:
         total_cpu_utilization = 0
         total_memory_utilization = 0
-        total_cpu_capacity = 0
-        total_memory_capacity = 0
-        total_cost = 0.0
         node_count = 0
 
         for node in nodes:
             instance_id = get_instance_id(node)
             if instance_id:
                 instance_type, price = get_instance_details(instance_id)
-                cpu_utilization, memory_utilization, cpu_capacity, memory_capacity = get_node_utilization(node)
+                cpu_utilization, memory_utilization = get_node_utilization(node)
 
-                print(f"\nInstance ID: {node.metadata.name}")
+                print(f"Instance ID: {node.metadata.name}")
                 print(f"Instance Type: {instance_type}")
-                print(f"Node Pricing: ${price:.4f}/hour")  # Ціна, отримана з функції
-                print(f"CPU Capacity: {cpu_capacity:.2f} vCPUs")
-                print(f"Memory Capacity: {memory_capacity:.2f} GiB")
+                print(f"Node Pricing: ${price}/hour")  # Ціна, отримана з функції
 
                 # Відображаємо прогрес-бари для утилізації CPU та пам'яті
                 display_htop_style(cpu_utilization, memory_utilization)
@@ -126,9 +121,6 @@ def analyze_nodes():
                 # Накопичуємо загальні значення
                 total_cpu_utilization += cpu_utilization
                 total_memory_utilization += memory_utilization
-                total_cpu_capacity += cpu_capacity
-                total_memory_capacity += memory_capacity
-                total_cost += price  # Додаємо ціну до загальної вартості
                 node_count += 1
             else:
                 print(f"Error: Could not retrieve instance ID for node {node.metadata.name}")
@@ -139,10 +131,6 @@ def analyze_nodes():
             avg_memory_utilization = total_memory_utilization / node_count
             print(f"\nAverage CPU Utilization for all nodes: {avg_cpu_utilization:.2f}%")
             print(f"Average Memory Utilization for all nodes: {avg_memory_utilization:.2f}%")
-            print(f"Total Nodes: {node_count}")
-            print(f"Total CPU Capacity: {total_cpu_capacity:.2f} vCPUs")
-            print(f"Total Memory Capacity: {total_memory_capacity:.2f} GiB")
-            print(f"Total Cost for all nodes: ${total_cost:.4f}/hour")  # Виведення загальної вартості
         else:
             print("\nNo nodes found for utilization analysis.")
 
