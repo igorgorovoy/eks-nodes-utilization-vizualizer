@@ -12,7 +12,8 @@ ec2_client = boto3.client('ec2', region_name=aws_region)
 config.load_kube_config(context="arn:aws:eks:eu-west-1:294949574448:cluster/dev-1-30")
 v1 = client.CoreV1Api()
 
-nodes = v1.list_node().items
+def get_nodes():
+    return v1.list_node().items
 
 def get_instance_id(node):
     annotations = node.metadata.annotations
@@ -120,6 +121,7 @@ def display_progress_bar(value):
 
 def analyze_nodes():
     while True:
+        nodes = get_nodes()  # Оновлюємо список нодів на кожному циклі
         total_cpu_utilization = 0
         total_memory_utilization = 0
         total_cpu_capacity = 0
