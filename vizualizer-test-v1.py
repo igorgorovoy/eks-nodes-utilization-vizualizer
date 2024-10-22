@@ -111,6 +111,22 @@ def get_node_utilization(node):
     memory_utilization = (used_memory / memory_capacity) * 100 if memory_capacity > 0 else 0
     return cpu_utilization, memory_utilization, cpu_capacity, memory_capacity
 
+def get_node_status(node):
+    statuses = []
+    for condition in node.status.conditions:
+        if condition.status == 'True':
+            statuses.append(condition.type)
+    if 'Ready' in statuses:
+        return "Ready"
+    else:
+        return ", ".join(statuses) if statuses else "NotReady"
+
+def get_node_type(node):
+    if "node-role.kubernetes.io/master" in node.metadata.labels:
+        return "Master"
+    else:
+        return "Worker"
+
 def display_progress_bar(value):
     bar_length = 20  # Довжина прогрес-бару
     filled_length = int(bar_length * (value / 100))
@@ -135,6 +151,8 @@ def analyze_nodes():
             if instance_id:
                 instance_type, price = get_instance_details(instance_id)
                 cpu_utilization, memory_utilization, cpu_capacity, memory_capacity = get_node_utilization(node)
+                node_status = get_node_status(node)
+                node_type = get_node_type(node)
 
                 node_data.append({
                     "name": node.metadata.name,
@@ -143,7 +161,9 @@ def analyze_nodes():
                     "cpu_capacity": cpu_capacity,
                     "memory_capacity": memory_capacity,
                     "cpu_utilization": cpu_utilization,
-                    "memory_utilization": memory_utilization
+                    "memory_utilization": memory_utilization,
+                    "status": node_status,
+                    "type": node_type
                 })
 
                 total_cpu_utilization += cpu_utilization
@@ -159,18 +179,18 @@ def analyze_nodes():
             avg_cpu_utilization = total_cpu_utilization / node_count
             avg_memory_utilization = total_memory_utilization / node_count
 
-            print("\n" + "-" * 130)
+            print("\n" + "-" * 160)
             print(
-                f"{'Node Name':<30} | {'Instance Type':<20} | {'Node Pricing':<15} | {'CPU Capacity':<15} | {'Memory Capacity':<15} | {'CPU Utilization':<20} | {'Memory Utilization':<20}")
-            print("-" * 130)
+                f"{'Node Name':<30} | {'Instance Type':<20} | {'Node Pricing':<15} | {'CPU Capacity':<15} | {'Memory Capacity':<15} | {'CPU Utilization':<20} | {'Memory Utilization':<20} | {'Status':<10} | {'Node Type':<10}")
+            print("-" * 160)
             for data in node_data:
                 cpu_bar = display_progress_bar(data["cpu_utilization"])
                 memory_bar = display_progress_bar(data["memory_utilization"])
 
                 print(
-                    f"{data['name']:<30} | {data['instance_type']:<20} | ${data['price']:.4f}/hour     | {data['cpu_capacity']:<15} | {data['memory_capacity']:<15} | {cpu_bar} | {memory_bar}")
+                    f"{data['name']:<30} | {data['instance_type']:<20} | ${data['price']:.4f}/hour     | {data['cpu_capacity']:<15} | {data['memory_capacity']:<15} | {cpu_bar} | {memory_bar} | {data['status']:<10} | {data['type']:<10}")
 
-            print("-" * 130)
+            print("-" * 160)
             print(f"\nAverage CPU Utilization for all nodes: {avg_cpu_utilization:.2f}%")
             print(f"Average Memory Utilization for all nodes: {avg_memory_utilization:.2f}%")
             print(f"Total Nodes: {node_count}")
