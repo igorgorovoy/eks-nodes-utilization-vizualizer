@@ -116,7 +116,7 @@ def display_progress_bar(value):
     filled_length = int(bar_length * (value / 100))
     bar = '█' * filled_length + ' ' * (bar_length - filled_length)
 
-    color = Fore.RED if value < 30 else Fore.YELLOW if value < 90 else Fore.GREEN
+    color = Fore.RED if value < 30 else Fore.YELLOW if value < 80 else Fore.GREEN
     return f"{color}[{bar}] {value:.2f}%{Fore.RESET}"
 
 def analyze_nodes():
