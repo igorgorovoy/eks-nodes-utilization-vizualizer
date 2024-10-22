@@ -39,8 +39,10 @@ def get_instance_id_by_internal_ip(node):
 def get_instance_details(instance_id):
     instance_details = ec2_client.describe_instances(InstanceIds=[instance_id])
     instance_type = instance_details['Reservations'][0]['Instances'][0]['InstanceType']
+    instance_lifecycle = instance_details['Reservations'][0]['Instances'][0].get('InstanceLifecycle', 'On-Demand')
+    instance_status = 'Spot' if instance_lifecycle == 'spot' else 'On-Demand'
     price = get_instance_price(instance_type)
-    return instance_type, price
+    return instance_type, price, instance_status
 
 def get_instance_price(instance_type):
     pricing_client = boto3.client('pricing', region_name=pricing_region)
@@ -133,12 +135,13 @@ def analyze_nodes():
         for node in nodes:
             instance_id = get_instance_id(node)
             if instance_id:
-                instance_type, price = get_instance_details(instance_id)
+                instance_type, price, instance_status = get_instance_details(instance_id)
                 cpu_utilization, memory_utilization, cpu_capacity, memory_capacity = get_node_utilization(node)
 
                 node_data.append({
                     "name": node.metadata.name,
                     "instance_type": instance_type,
+                    "instance_status": instance_status,  # Додаємо статус інстансу (Spot/On-Demand)
                     "price": price,
                     "cpu_capacity": cpu_capacity,
                     "memory_capacity": memory_capacity,
@@ -159,18 +162,18 @@ def analyze_nodes():
             avg_cpu_utilization = total_cpu_utilization / node_count
             avg_memory_utilization = total_memory_utilization / node_count
 
-            print("\n" + "-" * 130)
+            print("\n" + "-" * 160)
             print(
-                f"{'Node Name':<30} | {'Instance Type':<20} | {'Node Pricing':<15} | {'CPU Capacity':<15} | {'Memory Capacity':<15} | {'CPU Utilization':<20} | {'Memory Utilization':<20}")
-            print("-" * 130)
+                f"{'Node Name':<30} | {'Instance Type':<20} | {'Instance Status':<15} | {'Node Pricing':<15} | {'CPU Capacity':<15} | {'Memory Capacity':<15} | {'CPU Utilization':<20} | {'Memory Utilization':<20}")
+            print("-" * 160)
             for data in node_data:
                 cpu_bar = display_progress_bar(data["cpu_utilization"])
                 memory_bar = display_progress_bar(data["memory_utilization"])
 
                 print(
-                    f"{data['name']:<30} | {data['instance_type']:<20} | ${data['price']:.4f}/hour     | {data['cpu_capacity']:<15} | {data['memory_capacity']:<15} | {cpu_bar} | {memory_bar}")
+                    f"{data['name']:<30} | {data['instance_type']:<20} | {data['instance_status']:<15} | ${data['price']:.4f}/hour     | {data['cpu_capacity']:<15} | {data['memory_capacity']:<15} | {cpu_bar} | {memory_bar}")
 
-            print("-" * 130)
+            print("-" * 160)
             print(f"\nAverage CPU Utilization for all nodes: {avg_cpu_utilization:.2f}%")
             print(f"Average Memory Utilization for all nodes: {avg_memory_utilization:.2f}%")
             print(f"Total Nodes: {node_count}")
