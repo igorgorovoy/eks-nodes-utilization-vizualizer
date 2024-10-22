@@ -135,6 +135,7 @@ def get_real_memory_usage_all_namespaces():
     if pod_metrics:
         for pod in pod_metrics['items']:
             for container in pod['containers']:
+                print (container)
                 memory_usage = container['usage']['memory']
                 if memory_usage.endswith('Gi'):
                     total_memory_usage += int(memory_usage[:-2])  # В GiB
@@ -142,46 +143,50 @@ def get_real_memory_usage_all_namespaces():
                     total_memory_usage += int(memory_usage[:-2]) / 1024  # В GiB
                 elif memory_usage.endswith('Ki'):
                     total_memory_usage += int(memory_usage[:-2]) / (1024 ** 2)  # В GiB
-
     return total_memory_usage  # Повертаємо в GiB
 
-def get_pod_cpu_usage(node):
-    pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
-    total_cpu_usage = 0
+# def get_pod_cpu_usage(node):
+#     pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
+#     total_cpu_usage = 0
+#
+#     for pod in pods:
+#         print(f"Pod Name: {pod.metadata.name}, Namespace: {pod.metadata.namespace}")  # Друкуємо назву та неймспейс пода
+#         if pod.spec.containers:
+#             for container in pod.spec.containers:
+#                 resources = container.resources
+#                 if resources.requests and 'cpu' in resources.requests:
+#                     cpu_request = resources.requests['cpu']
+#                     total_cpu_usage += int(cpu_request[:-1]) / 1000 if cpu_request.endswith('m') else int(cpu_request)  # Конвертуємо в vCPUs
+#
+#     print(f"Total CPU Usage for Node {node.metadata.name}: {total_cpu_usage:.2f} vCPUs")  # Друкуємо загальне використання CPU
+#     return total_cpu_usage  # Повертаємо в vCPUs
 
-    for pod in pods:
-        print(f"Pod Name: {pod.metadata.name}, Namespace: {pod.metadata.namespace}")  # Друкуємо назву та неймспейс пода
-        if pod.spec.containers:
-            for container in pod.spec.containers:
-                resources = container.resources
-                if resources.requests and 'cpu' in resources.requests:
-                    cpu_request = resources.requests['cpu']
-                    total_cpu_usage += int(cpu_request[:-1]) / 1000 if cpu_request.endswith('m') else int(cpu_request)  # Конвертуємо в vCPUs
-
-    print(f"Total CPU Usage for Node {node.metadata.name}: {total_cpu_usage:.2f} vCPUs")  # Друкуємо загальне використання CPU
-    return total_cpu_usage  # Повертаємо в vCPUs
-
-def get_real_memory_usage(node):
-    pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
-    total_memory_usage = 0
-
-    for pod in pods:
-        print(f"Pod Name: {pod.metadata.name}, Namespace: {pod.metadata.namespace}")  # Друкуємо назву та неймспейс пода
-        if pod.spec.containers:
-            for container in pod.spec.containers:
-                resources = container.resources
-                if resources.requests and 'memory' in resources.requests:
-                    memory_request = resources.requests['memory']
-                    total_memory_usage += convert_memory_to_gib(memory_request)  # Конвертуємо пам'ять до GiB
-
-    print(f"Total Memory Usage for Node {node.metadata.name}: {total_memory_usage:.2f} GiB")  # Друкуємо загальне використання пам'яті
-    return total_memory_usage  # Повертаємо в GiB
+# def get_real_memory_usage(node):
+#     pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
+#     total_memory_usage = 0
+#
+#     for pod in pods:
+#         print(f"Pod Name: {pod.metadata.name}, Namespace: {pod.metadata.namespace}")  # Друкуємо назву та неймспейс пода
+#         if pod.spec.containers:
+#             for container in pod.spec.containers:
+#                 resources = container.resources
+#                 if resources.requests and 'memory' in resources.requests:
+#                     memory_request = resources.requests['memory']
+#                     total_memory_usage += convert_memory_to_gib(memory_request)  # Конвертуємо пам'ять до GiB
+#
+#     print(f"Total Memory Usage for Node {node.metadata.name}: {total_memory_usage:.2f} GiB")  # Друкуємо загальне використання пам'яті
+#     return total_memory_usage  # Повертаємо в GiB
 
 def get_node_utilization(node):
     cpu_capacity = float(node.status.allocatable['cpu'].replace('m', '')) / 1000  # Конвертуємо в vCPUs
     memory_capacity = convert_memory_to_gib(node.status.allocatable['memory'])  # Конвертуємо в GiB
     real_cpu_usage = get_real_cpu_usage_all_namespaces()  # Отримуємо реальне споживання CPU
     real_memory_usage = get_real_memory_usage_all_namespaces()  # Отримуємо реальне споживання пам'яті
+
+    print ("cpu_capacity "+str(cpu_capacity))
+    print("memory_capacity " + str(memory_capacity))
+    print("real_cpu_usage " + str(real_cpu_usage))
+    print("real_memory_usage " + str(real_memory_usage))
 
     cpu_utilization = (real_cpu_usage / cpu_capacity) * 100 if cpu_capacity > 0 else 0
     memory_utilization = (real_memory_usage / memory_capacity) * 100 if memory_capacity > 0 else 0
@@ -207,7 +212,7 @@ def analyze_nodes():
         print(f"Instance ID: {instance_id}, Instance Type: {instance_type}, Price: {price:.4f} USD/hour, Status: {instance_status}")
         print(f"CPU Utilization: {cpu_utilization:.2f}% (Used: {real_cpu_usage:.2f} vCPUs, Capacity: {cpu_capacity:.2f} vCPUs)")
         print(f"Memory Utilization: {memory_utilization:.2f}% (Used: {real_memory_usage:.2f} GiB, Capacity: {memory_capacity:.2f} GiB)")
-        display_progress_bar(cpu_utilization)
+        # display_progress_bar(cpu_utilization)
 
 if __name__ == "__main__":
     while True:
