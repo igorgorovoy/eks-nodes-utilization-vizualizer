@@ -2,6 +2,7 @@ import time
 import json
 import boto3
 from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 from colorama import Fore
 
 aws_region = 'eu-west-1'
@@ -9,13 +10,13 @@ pricing_region = 'us-east-1'
 
 ec2_client = boto3.client('ec2', region_name=aws_region)
 
+# Завантажуємо конфігурацію Kubernetes
 config.load_kube_config(context="arn:aws:eks:eu-west-1:294949574448:cluster/dev-1-30")
 v1 = client.CoreV1Api()
-
+metrics_api = client.CustomObjectsApi()  # Використовуємо CustomObjectsApi для отримання метрик
 
 def get_nodes():
     return v1.list_node().items
-
 
 def get_instance_id(node):
     annotations = node.metadata.annotations
@@ -23,7 +24,6 @@ def get_instance_id(node):
         return annotations['node.kubernetes.io/instance-id']
     else:
         return get_instance_id_by_internal_ip(node)
-
 
 def get_instance_id_by_internal_ip(node):
     for addr in node.status.addresses:
@@ -39,7 +39,6 @@ def get_instance_id_by_internal_ip(node):
                 return response['Reservations'][0]['Instances'][0]['InstanceId']
     return None
 
-
 def get_instance_details(instance_id):
     instance_details = ec2_client.describe_instances(InstanceIds=[instance_id])
     instance_type = instance_details['Reservations'][0]['Instances'][0]['InstanceType']
@@ -47,7 +46,6 @@ def get_instance_details(instance_id):
     instance_status = 'Spot' if instance_lifecycle == 'spot' else 'On-Demand'
     price = get_instance_price(instance_type)
     return instance_type, price, instance_status
-
 
 def get_instance_price(instance_type):
     pricing_client = boto3.client('pricing', region_name=pricing_region)
@@ -70,179 +68,148 @@ def get_instance_price(instance_type):
                         return float(price[price_key]['pricePerUnit']['USD'])
     return 0.0
 
+def get_pod_metrics(namespace="default"):
+    """Отримуємо метрики подів з CustomObjectsApi."""
+    try:
+        return metrics_api.list_namespaced_custom_object(
+            group="metrics.k8s.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="pods"
+        )
+    except ApiException as e:
+        print(f"Error fetching pod metrics: {e}")
+        return None
 
-def get_pod_resource_requests(node):
-    pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
-    total_requests_cpu = 0
-    total_requests_memory = 0
+def get_pod_metrics_all_namespaces():
+    """Отримуємо метрики подів з CustomObjectsApi для всіх неймспейсів."""
+    try:
+        return metrics_api.list_cluster_custom_object(
+            group="metrics.k8s.io",
+            version="v1beta1",
+            plural="pods"
+        )
+    except ApiException as e:
+        print(f"Error fetching pod metrics: {e}")
+        return None
 
-    for pod in pods:
-        if pod.spec.containers:
-            for container in pod.spec.containers:
-                resources = container.resources
-                if resources and resources.requests:  # Check if resources and requests are not None
-                    cpu_request = resources.requests.get('cpu', '0')
-                    memory_request = resources.requests.get('memory', '0')
+def convert_memory_to_gib(memory_str):
+    """Конвертує рядок пам'яті у GiB."""
+    if memory_str.endswith('Gi'):
+        return float(memory_str[:-2])  # В GiB
+    elif memory_str.endswith('Mi'):
+        return float(memory_str[:-2]) / 1024  # Конвертуємо MiB в GiB
+    elif memory_str.endswith('Ki'):
+        return float(memory_str[:-2]) / (1024 ** 2)  # Конвертуємо KiB в GiB
+    else:
+        raise ValueError(f"Unknown memory unit: {memory_str}")
 
-                    # Process CPU requests
-                    if cpu_request:
-                        try:
-                            total_requests_cpu += int(cpu_request[:-1]) / 1000 if cpu_request.endswith('m') else int(
-                                cpu_request)
-                        except ValueError:
-                            print(f"Warning: Invalid CPU request value '{cpu_request}' for pod '{pod.metadata.name}'")
+def get_real_cpu_usage_all_namespaces():
+    """Отримуємо реальне використання CPU для всіх подів у всіх неймспейсах."""
+    pod_metrics = get_pod_metrics_all_namespaces()
+    total_cpu_usage = 0
 
-                    # Process memory requests
-                    if memory_request:
-                        try:
-                            total_requests_memory += int(memory_request[:-2]) if memory_request.endswith('Mi') else int(
-                                memory_request[:-2]) * 1024
-                        except ValueError:
-                            print(
-                                f"Warning: Invalid Memory request value '{memory_request}' for pod '{pod.metadata.name}'")
+    if pod_metrics:
+        for pod in pod_metrics['items']:
+            for container in pod['containers']:
+                cpu_usage = container['usage']['cpu']
+                if cpu_usage.endswith('m'):
+                    cpu_usage_milli = int(cpu_usage[:-1])  # В міліядрах
+                    total_cpu_usage += cpu_usage_milli / 1000  # Конвертуємо в vCPUs
+                elif cpu_usage.endswith('n'):
+                    cpu_usage_nano = int(cpu_usage[:-1]) / 1_000_000_000  # Конвертуємо з нано в vCPUs
+                    total_cpu_usage += cpu_usage_nano
+                elif cpu_usage.endswith('u'):
+                    cpu_usage_micro = int(cpu_usage[:-1]) / 1_000_000  # Конвертуємо з мікро в vCPUs
+                    total_cpu_usage += cpu_usage_micro
+                else:
+                    total_cpu_usage += int(cpu_usage)  # Якщо це просто ядра, то без змін
 
-    return total_requests_cpu, total_requests_memory  # Return in vCPUs and GiB
+    return total_cpu_usage
 
+def get_real_memory_usage_all_namespaces():
+    """Отримуємо реальне використання пам'яті для всіх подів у всіх неймспейсах."""
+    pod_metrics = get_pod_metrics_all_namespaces()
+    total_memory_usage = 0
+
+    if pod_metrics:
+        for pod in pod_metrics['items']:
+            for container in pod['containers']:
+                memory_usage = container['usage']['memory']
+                if memory_usage.endswith('Gi'):
+                    total_memory_usage += int(memory_usage[:-2])  # В GiB
+                elif memory_usage.endswith('Mi'):
+                    total_memory_usage += int(memory_usage[:-2]) / 1024  # В GiB
+                elif memory_usage.endswith('Ki'):
+                    total_memory_usage += int(memory_usage[:-2]) / (1024 ** 2)  # В GiB
+
+    return total_memory_usage  # Повертаємо в GiB
 
 def get_pod_cpu_usage(node):
     pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
     total_cpu_usage = 0
 
     for pod in pods:
+        print(f"Pod Name: {pod.metadata.name}, Namespace: {pod.metadata.namespace}")  # Друкуємо назву та неймспейс пода
         if pod.spec.containers:
             for container in pod.spec.containers:
-                if container.resources and container.resources.limits:  # Check if resources and limits are not None
-                    cpu_usage = container.resources.limits.get('cpu', '0')
-                    if cpu_usage:  # Ensure cpu_usage is not empty
-                        try:
-                            if cpu_usage == '0':
-                                continue  # Ignore zero usage
-                            total_cpu_usage += int(cpu_usage[:-1]) / 1000  # Convert from "m" to vCPUs
-                        except ValueError:
-                            print(f"Warning: Invalid CPU usage value '{cpu_usage}' for pod '{pod.metadata.name}'")
-    return total_cpu_usage  # Return in vCPUs
+                resources = container.resources
+                if resources.requests and 'cpu' in resources.requests:
+                    cpu_request = resources.requests['cpu']
+                    total_cpu_usage += int(cpu_request[:-1]) / 1000 if cpu_request.endswith('m') else int(cpu_request)  # Конвертуємо в vCPUs
 
+    print(f"Total CPU Usage for Node {node.metadata.name}: {total_cpu_usage:.2f} vCPUs")  # Друкуємо загальне використання CPU
+    return total_cpu_usage  # Повертаємо в vCPUs
 
-def get_pod_memory_usage(node):
+def get_real_memory_usage(node):
     pods = v1.list_pod_for_all_namespaces(field_selector=f'spec.nodeName={node.metadata.name}').items
     total_memory_usage = 0
 
     for pod in pods:
+        print(f"Pod Name: {pod.metadata.name}, Namespace: {pod.metadata.namespace}")  # Друкуємо назву та неймспейс пода
         if pod.spec.containers:
             for container in pod.spec.containers:
-                if container.resources and container.resources.limits:  # Check if resources and limits are not None
-                    memory_usage = container.resources.limits.get('memory', '0Gi')
-                    if memory_usage:  # Ensure memory_usage is not empty
-                        try:
-                            if memory_usage.endswith('Mi'):
-                                total_memory_usage += int(memory_usage[:-2]) / 1024  # In GiB
-                            elif memory_usage.endswith('Gi'):
-                                total_memory_usage += int(memory_usage[:-2])  # In GiB
-                        except ValueError:
-                            print(f"Warning: Invalid Memory usage value '{memory_usage}' for pod '{pod.metadata.name}'")
+                resources = container.resources
+                if resources.requests and 'memory' in resources.requests:
+                    memory_request = resources.requests['memory']
+                    total_memory_usage += convert_memory_to_gib(memory_request)  # Конвертуємо пам'ять до GiB
 
-    return total_memory_usage  # Return in GiB
-
+    print(f"Total Memory Usage for Node {node.metadata.name}: {total_memory_usage:.2f} GiB")  # Друкуємо загальне використання пам'яті
+    return total_memory_usage  # Повертаємо в GiB
 
 def get_node_utilization(node):
-    cpu_allocatable_str = node.status.allocatable['cpu']
-    cpu_allocatable = int(cpu_allocatable_str.replace('m', '')) / 1000 if 'm' in cpu_allocatable_str else int(
-        cpu_allocatable_str)
-    memory_allocatable = int(node.status.allocatable['memory'].replace('Ki', '')) / (1024 * 1024)
+    cpu_capacity = float(node.status.allocatable['cpu'].replace('m', '')) / 1000  # Конвертуємо в vCPUs
+    memory_capacity = convert_memory_to_gib(node.status.allocatable['memory'])  # Конвертуємо в GiB
+    real_cpu_usage = get_real_cpu_usage_all_namespaces()  # Отримуємо реальне споживання CPU
+    real_memory_usage = get_real_memory_usage_all_namespaces()  # Отримуємо реальне споживання пам'яті
 
-    cpu_capacity_str = node.status.capacity['cpu']
-    cpu_capacity = int(cpu_capacity_str.replace('m', '')) / 1000 if 'm' in cpu_capacity_str else int(cpu_capacity_str)
-    memory_capacity = round(int(node.status.capacity['memory'].replace('Ki', '')) / (1024 * 1024))  # Округлення
+    cpu_utilization = (real_cpu_usage / cpu_capacity) * 100 if cpu_capacity > 0 else 0
+    memory_utilization = (real_memory_usage / memory_capacity) * 100 if memory_capacity > 0 else 0
 
-    # Get actual usage
-    used_cpu = get_pod_cpu_usage(node)  # Usage by pods
-    used_memory = get_pod_memory_usage(node)  # Memory usage by pods
+    return cpu_utilization, memory_utilization, cpu_capacity, memory_capacity, real_cpu_usage, real_memory_usage
 
-    cpu_utilization = (used_cpu / cpu_capacity) * 100 if cpu_capacity > 0 else 0
-    memory_utilization = (used_memory / memory_capacity) * 100 if memory_capacity > 0 else 0
-    return cpu_utilization, memory_utilization, cpu_capacity, memory_capacity, used_cpu, used_memory
-
-
-def display_progress_bar(value, max_value):
-    bar_length = 20  # Length of the progress bar
-    filled_length = int(bar_length * (value / max_value))
-    bar = '█' * filled_length + ' ' * (bar_length - filled_length)
-
-    color = Fore.RED if value < 30 else Fore.YELLOW if value < 80 else Fore.GREEN
-    return f"{color}[{bar}] {value:.2f}/{max_value:.2f}{Fore.RESET}"
-
+def display_progress_bar(value):
+    bar_length = 30
+    block = int(round(bar_length * value / 100))
+    bar = "#" * block + "-" * (bar_length - block)
+    color = Fore.GREEN if value < 80 else Fore.YELLOW if value < 90 else Fore.RED
+    print(f'\r{color}[{bar}] {value:.2f}%', end='')
 
 def analyze_nodes():
-    while True:
-        nodes = get_nodes()  # Refresh the node list on each cycle
-        total_cpu_utilization = 0
-        total_memory_utilization = 0
-        total_cpu_capacity = 0
-        total_memory_capacity = 0
-        total_cost = 0.0
-        node_count = 0
-        node_data = []
+    nodes = get_nodes()
+    for node in nodes:
+        instance_id = get_instance_id(node)
+        instance_type, price, instance_status = get_instance_details(instance_id)
 
-        for node in nodes:
-            instance_id = get_instance_id(node)
-            if instance_id:
-                instance_type, price, instance_status = get_instance_details(instance_id)
-                cpu_utilization, memory_utilization, cpu_capacity, memory_capacity, used_cpu, used_memory = get_node_utilization(
-                    node)
-                requests_cpu, requests_memory = get_pod_resource_requests(node)
+        cpu_utilization, memory_utilization, cpu_capacity, memory_capacity, real_cpu_usage, real_memory_usage = get_node_utilization(node)
 
-                node_data.append({
-                    "name": node.metadata.name,
-                    "instance_type": instance_type,
-                    "instance_status": instance_status,  # Add instance status (Spot/On-Demand)
-                    "price": price,
-                    "cpu_capacity": cpu_capacity,
-                    "memory_capacity": memory_capacity,
-                    "cpu_utilization": cpu_utilization,
-                    "memory_utilization": memory_utilization,
-                    "requests_cpu": requests_cpu,
-                    "requests_memory": requests_memory,
-                    "used_cpu": used_cpu,
-                    "used_memory": used_memory
-                })
-
-                total_cpu_utilization += cpu_utilization
-                total_memory_utilization += memory_utilization
-                total_cpu_capacity += cpu_capacity
-                total_memory_capacity += memory_capacity
-                total_cost += price
-
-                node_count += 1
-
-        # Calculate averages
-        avg_cpu_utilization = total_cpu_utilization / node_count if node_count > 0 else 0
-        avg_memory_utilization = total_memory_utilization / node_count if node_count > 0 else 0
-
-        # Clear console output
-        print("\033c", end="")  # Clear console on Unix systems
-
-        # Print headers
-        print(
-            f"{'Node Name':<30} | {'Instance Type':<20} | {'Instance Status':<15} | {'Price (USD)':<15} | {'CPU Utilization (%)':<25} | {'Memory Utilization (%)':<25} | {'CPU Capacity (vCPUs)':<20} | {'Memory Capacity (GiB)':<20} | {'Requests CPU (vCPUs)':<20} | {'Requests Memory (GiB)':<20} | {'Used CPU (vCPUs)':<20} | {'Used Memory (GiB)':<20}")
-        print("-" * 175)
-
-        # Print node data
-        for data in node_data:
-            cpu_progress_bar = display_progress_bar(data['cpu_utilization'], 100)
-            memory_progress_bar = display_progress_bar(data['memory_utilization'], 100)
-
-            print(
-                f"{data['name']:<30} | {data['instance_type']:<20} | {data['instance_status']:<15} | {data['price']:<15.2f} | {cpu_progress_bar:<25} | {memory_progress_bar:<25} | {data['cpu_capacity']:<20.2f} | {round(data['memory_capacity']):<20} | {data['requests_cpu']:<20.2f} | {data['requests_memory']:<20.2f} | {data['used_cpu']:<20.2f} | {data['used_memory']:<20.2f}")
-
-        print("-" * 175)
-        print(f"Total CPU Utilization: {avg_cpu_utilization:.2f}%")
-        print(f"Total Memory Utilization: {avg_memory_utilization:.2f}%")
-        print(f"Total CPU Capacity: {total_cpu_capacity:.2f} vCPUs")
-        print(f"Total Memory Capacity: {total_memory_capacity:.2f} GiB")
-        print(f"Total Cost: {total_cost:.2f} USD")
-
-        time.sleep(60)  # Wait for 60 seconds before refreshing
-
+        print(f"\nNode Name: {node.metadata.name}")
+        print(f"Instance ID: {instance_id}, Instance Type: {instance_type}, Price: {price:.4f} USD/hour, Status: {instance_status}")
+        print(f"CPU Utilization: {cpu_utilization:.2f}% (Used: {real_cpu_usage:.2f} vCPUs, Capacity: {cpu_capacity:.2f} vCPUs)")
+        print(f"Memory Utilization: {memory_utilization:.2f}% (Used: {real_memory_usage:.2f} GiB, Capacity: {memory_capacity:.2f} GiB)")
+        display_progress_bar(cpu_utilization)
 
 if __name__ == "__main__":
-    analyze_nodes()
+    while True:
+        analyze_nodes()
+        time.sleep(60)  # Затримка перед наступним аналізом
