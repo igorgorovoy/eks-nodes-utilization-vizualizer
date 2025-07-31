@@ -11,6 +11,7 @@ pricing_region = 'us-east-1'
 ec2_client = boto3.client('ec2', region_name=aws_region)
 ###
 # Завантажуємо конфігурацію Kubernetes
+##
 config.load_kube_config(context="arn:aws:eks:eu-west-1:294949574448:cluster/dev-1-30")
 v1 = client.CoreV1Api()
 metrics_api = client.CustomObjectsApi()  # Використовуємо CustomObjectsApi для отримання метрик
